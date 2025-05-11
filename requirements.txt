@@ -1,0 +1,6 @@
+Flask==3.0.3
+langchain
+langchain-google-genai
+python-dotenv==1.0.0
+supabase
+PyJWT
