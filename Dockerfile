@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the application code into the container
 COPY app.py .
 COPY .env .
+COPY personas.json .
 
 # Expose the port the Flask app runs on
 EXPOSE 5000

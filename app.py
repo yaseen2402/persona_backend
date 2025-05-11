@@ -3,6 +3,10 @@ import jwt
 import traceback
 import sys # Import sys for flushing
 
+import json
+from pathlib import Path
+from datetime import datetime, timedelta
+
 from flask import Flask, request, jsonify, url_for
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage # Import message types
@@ -27,6 +31,48 @@ def log_error(message, exception=None):
         traceback.print_exc(file=sys.stderr)
         sys.stderr.flush()
 
+def check_message_limits(user_id):
+    log_info(f"[check_message_limits] Checking message limits for user {user_id}.")
+    
+    if supabase is None:
+        log_error("[check_message_limits] Supabase is not initialized.")
+        return None, None
+    
+    try:
+        # Get today's date for checking daily message limit
+        today = datetime.today().date()
+        
+        # Check user's message stats for today and total
+        response = supabase.table('user_message_stats') \
+            .select('daily_count, total_count') \
+            .eq('user_id', user_id) \
+            .single() \
+            .execute()
+        
+        if not response.data:
+            log_warning(f"[check_message_limits] No data found for user {user_id}.")
+            return None, None
+
+        stats = response.data
+        free_messages_today = stats['daily_count']
+        total_messages = stats['total_count']
+        
+        # Check if user has remaining free messages for today
+        if free_messages_today >= 20:
+            log_warning(f"[check_message_limits] User {user_id} has exceeded the daily free messages limit.")
+            return False, "Daily free message limit exceeded."
+        
+        # Check if total message count exceeds 500
+        if total_messages >= 500:
+            log_warning(f"[check_message_limits] User {user_id} has exceeded the total message limit.")
+            return False, "Total message limit exceeded."
+
+        return True, {'free_messages_today': free_messages_today, 'total_messages': total_messages}
+        
+    except Exception as e:
+        log_error(f"[check_message_limits] Error checking message limits for user {user_id}: {e}", e)
+        return False, "An error occurred while checking your message limits."
+    
 app = Flask(__name__)
 
 # Get the Google API Key from environment variables
@@ -36,6 +82,16 @@ google_api_key = os.getenv("GOOGLE_API_KEY")
 supabase_url = os.getenv("SUPABASE_URL") # Get Supabase URL
 supabase_service_key = os.getenv("SUPABASE_SERVICE_KEY") # Get Supabase Service Role Key
 supabase_jwt_secret = os.getenv("SUPABASE_JWT_SECRET")
+PERSONAS_PATH = Path("personas.json")
+
+SUBSCRIPTION_PLAN_TABLE = 'subscription_plans'
+USER_MESSAGE_STATS_TABLE = 'user_message_stats'
+USER_SUBSCRIPTIONS_TABLE = 'user_subscriptions'
+
+with open(PERSONAS_PATH, "r", encoding="utf-8") as f:
+    persona_list = json.load(f)
+    AI_PERSONAS = {p["id"]: p for p in persona_list}
+
 
 # --- Initialize Supabase Client (Backend) ---
 supabase = None
@@ -75,34 +131,6 @@ else:
         log_error(f"Error initializing Gemini model: {e}", e)
         log_warning("AI chat functionality will be disabled.")
 
-
-# --- Define AI Personas (Different instructions for the same underlying model) ---
-AI_PERSONAS = {
-    'luffy': {
-        'id': 'luffy',
-        'name': 'Luffy',
-        'instruction': 'You are a friendly and helpful AI assistant. Answer questions clearly and concisely.',
-        'description': 'Orewa Monkey D. Luffy, the captain of the Straw Hat Pirates. I am on a quest to find the One Piece and become the Pirate King!',
-        'profile_pic_filename': 'https://i.ibb.co/7tkMdVNp/luffy.jpg',
-        'avatar_initial': 'L',
-    },
-    'naruto': {
-        'id': 'naruto',
-        'name': 'Naruto',
-        'instruction': 'You are a creative writing assistant. Help the user brainstorm ideas, write stories, or compose poems. Be imaginative.',
-        'description': 'I am naruto uzumaki, a ninja from the Hidden Leaf Village. I dream of becoming Hokage and protecting my friends!',
-        'profile_pic_filename': 'https://i.ibb.co/spYVTRzx/naruto.jpg',
-        'avatar_initial': 'H',
-    },
-    'zoro': {
-        'id': 'zoro',
-        'name': 'Zoro',
-        'instruction': 'You are a knowledgeable technical expert. Provide detailed explanations and solutions for programming and technology-related questions.',
-        'description': 'I am zoro, the swordsman of the Straw Hat Pirates. I am on a quest to become the world\'s greatest swordsman!',
-        'profile_pic_filename': 'https://i.ibb.co/7tR2qpjf/zoro.jpg',
-        'avatar_initial': 'Z',
-    },
-}
 
 # Custom 500 error handler - Improved logging
 @app.errorhandler(500)
@@ -162,6 +190,126 @@ def verify_jwt(auth_header):
         log_error(f"[verify_jwt] Unexpected error: {e}", e)
         return None
 
+@app.route('/user/profile_stats', methods=['GET'])
+def get_user_profile_stats():
+    log_info(f"[{request.method}] Entering /user/profile_stats route.")
+
+    # 1. Verify JWT and get user ID
+    auth_header = request.headers.get('Authorization')
+    user_id = verify_jwt(auth_header)
+
+    if not user_id:
+        log_warning(f"[{request.method}] /user/profile_stats: Unauthorized access - Invalid or missing token.")
+        return jsonify({"error": "Unauthorized"}), 401
+
+    log_info(f"[{request.method}] /user/profile_stats: User ID {user_id} authenticated.")
+
+    if supabase is None:
+        log_error(f"[{request.method}] /user/profile_stats: Supabase client is not initialized.")
+        return jsonify({"error": "Database not available"}), 500
+
+    try:
+        # 2. Get User Message Stats
+        stats_response = supabase.table(USER_MESSAGE_STATS_TABLE) \
+            .select('daily_count, total_count', 'last_reset_at') \
+            .eq('user_id', user_id) \
+            .single() \
+            .execute()
+
+        stats_data = stats_response.data
+        daily_count = stats_data.get('daily_count', 0) if stats_data else 0
+        total_count = stats_data.get('total_count', 0) if stats_data else 0
+        last_reset_at = stats_data.get('last_reset_at') if stats_data else None
+
+        # 3. Determine Plan and Get Limits
+        plan_name = 'free' # Default to free
+        daily_limit = 0 # Default limits
+        total_limit = 0
+
+        # Query for active subscription
+        # Assuming 'status' column indicates active and current date is between start and end date
+        # This is a simplified query. Real-world might need more robust date checks and status handling.
+        now = datetime.utcnow().isoformat() # Use UTC time for database comparison
+        subscription_response = supabase.table(USER_SUBSCRIPTIONS_TABLE) \
+            .select('plan_id') \
+            .eq('user_id', user_id) \
+            .single() \
+            .execute()
+
+        subscription_data = subscription_response.data
+
+        if subscription_data and 'plan_id' in subscription_data:
+            # User has an active subscription, fetch plan details
+            plan_id = subscription_data['plan_id']
+            plan_response = supabase.table(SUBSCRIPTION_PLAN_TABLE) \
+                .select('name, daily_limit, total_limit') \
+                .eq('id', plan_id) \
+                .single() \
+                .execute()
+
+            plan_data = plan_response.data
+            if plan_data:
+                plan_name = plan_data.get('name', 'Unknown Paid Plan')
+                daily_limit = plan_data.get('daily_limit', 0)
+                total_limit = plan_data.get('total_limit', 0)
+                log_info(f"[{request.method}] /user/profile_stats: User {user_id} has active plan: {plan_name}")
+            else:
+                 log_warning(f"[{request.method}] /user/profile_stats: Plan details not found for plan_id: {plan_id}")
+                 # Fallback to free limits if plan details are missing
+                 free_plan_response = supabase.table(SUBSCRIPTION_PLAN_TABLE) \
+                     .select('daily_limit, total_limit') \
+                     .eq('name', 'free') \
+                     .single() \
+                     .execute()
+                 free_plan_data = free_plan_response.data
+                 if free_plan_data:
+                    daily_limit = free_plan_data.get('daily_limit', 0)
+                    total_limit = free_plan_data.get('total_limit', 0)
+                 plan_name = 'free (fallback)'
+
+        else:
+            # No active paid subscription, fetch free plan limits
+            log_info(f"[{request.method}] /user/profile_stats: User {user_id} has no active paid subscription. Fetching free plan limits.")
+            free_plan_response = supabase.table(SUBSCRIPTION_PLAN_TABLE) \
+                .select('daily_limit, total_limit') \
+                .eq('name', 'free') \
+                .single() \
+                .execute()
+
+            free_plan_data = free_plan_response.data
+            if free_plan_data:
+                plan_name = 'free'
+                daily_limit = free_plan_data.get('daily_limit', 0)
+                total_limit = free_plan_data.get('total_limit', 0)
+            else:
+                log_error(f"[{request.method}] /user/profile_stats: 'free' plan not found in {SUBSCRIPTION_PLAN_TABLE}!")
+                # Default to hardcoded limits if free plan is not defined
+                plan_name = 'free (limits not defined)'
+                daily_limit = 20 # Hardcoded fallback limits
+                total_limit = 500 # Hardcoded fallback limits
+
+
+        # 4. Construct Response
+        profile_stats = {
+            'plan_type': plan_name,
+            'daily_message_count': daily_count,
+            'daily_message_limit': daily_limit,
+            'total_message_count': total_count,
+            'total_message_limit': total_limit,
+            'last_reset_at': last_reset_at
+           
+        }
+
+        log_info(f"[{request.method}] /user/profile_stats: Returning stats: {profile_stats}")
+        return jsonify(profile_stats), 200
+
+    except Exception as e:
+        log_error(f"[{request.method}] /user/profile_stats: Unexpected error: {e}", e)
+        # Return a generic error to the client
+        return jsonify({"error": "Failed to fetch user profile data"}), 500
+
+
+
 
 # --- Endpoint to list AI models (personas) ---
 @app.route('/models', methods=['GET'])
@@ -169,16 +317,8 @@ def list_models():
     log_info(f"[{request.method}] Entering /models route.")
     """Returns a list of available AI models (personas)."""
     models_list = []
-    for ai_id, details in AI_PERSONAS.items():
-        profile_pic_url = details['profile_pic_filename']
-        # Static file serving was commented out, using direct URLs for now.
-        # if details.get('profile_pic_filename') and base_url:
-        #     # Generate the URL for the static file
-        #     # url_for('static', filename=...) creates the path like /static/image.png
-        #     # We prepend the base URL to make it absolute for the mobile app
-        #     # Assuming base_url is configured elsewhere or handled by frontend/cdn
-        #     # For now, using direct external URLs as in the personas dict
-        #     pass
+    for _id, details in AI_PERSONAS.items():
+        profile_pic_url = details['profile_pic_url']
 
 
         models_list.append({
@@ -242,15 +382,10 @@ def get_messages(ai_id):
         return jsonify({'error': f'An internal error occurred: {str(e)}'}), 500
 
 # --- Endpoint for Chat interaction ---
-# --- Endpoint for Chat interaction ---
 @app.route('/chat', methods=['POST'])
 def chat():
     log_info(f"[{request.method}] Entering /chat route.")
-    """
-    Receives user input, saves user message, gets AI response (potentially with RAG context),
-    saves AI response, and returns AI response text.
-    Requires user's JWT in the Authorization header.
-    """
+    
     if llm is None:
         log_error(f"[{request.method}] LLM is not initialized.")
         return jsonify({'error': 'AI model is not initialized (API key missing or invalid).'}), 503 # Service Unavailable
@@ -266,6 +401,13 @@ def chat():
         log_warning(f"[{request.method}] Authentication failed or no token.")
         return jsonify({'error': 'Authentication required or invalid token.'}), 401
     log_info(f"[{request.method}] JWT verified for user: {user_id}.")
+    
+    can_send, stats_or_error = check_message_limits(user_id)
+    if not can_send:
+        return jsonify({'error': stats_or_error}), 403  # Bad Request: Message limit exceeded
+    
+    free_messages_today = stats_or_error['free_messages_today']
+    total_messages = stats_or_error['total_messages']
 
     try:
         log_info(f"[{request.method}] Attempting to parse JSON request body.")
@@ -335,7 +477,19 @@ def chat():
         # --- Removed explicit status check: if insert_response_ai.status_code != 201: ---
         log_info(f"[{request.method}] AI message insert execution requested. Proceeding...")
 
+        if free_messages_today < 20:
+            new_free_messages = free_messages_today + 1
+            supabase.table('user_message_stats') \
+                .update({'daily_count': new_free_messages}) \
+                .eq('user_id', user_id) \
+                .execute()
 
+        # Update the total messages count
+        supabase.table('user_message_stats') \
+            .update({'total_count': total_messages + 1}) \
+            .eq('user_id', user_id) \
+            .execute()
+        
         log_info(f"[{request.method}] Message processing complete. Returning response.")
         return jsonify({'response': gemini_response})
 
