@@ -1,6 +1,10 @@
 Flask==3.0.3
+sentence-transformers==2.2.2
+torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu
 langchain
 langchain-google-genai
 python-dotenv==1.0.0
 supabase
 PyJWT
+numpy==1.26.4
+huggingface-hub>=0.30.0,<1.0
