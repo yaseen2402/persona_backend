@@ -1,0 +1,41 @@
+
+services:
+  web:
+    build: .
+    container_name: fastapi_web_service # Renamed for clarity
+    ports:
+      - "5000:5000"
+    volumes:
+      - .:/app # For development, allows code changes without rebuilding image
+    environment:
+      - HF_HOME=/app/.cache/huggingface 
+      - REDIS_URL=${REDIS_URL_UPSTASH}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      # Add any other FastAPI specific environment variables if needed
+    # === CORRECTED COMMAND FOR FASTAPI ===
+    # Use Gunicorn to manage Uvicorn workers. 'app:app' refers to the
+    # FastAPI instance 'app' in your 'app.py' file.
+    # command: gunicorn -k uvicorn.workers.UvicornWorker -w 4 --bind 0.0.0.0:5000 app:app
+    command: uvicorn app:app --host 0.0.0.0 --port 5000 --reload
+    # depends_on: # Not needed if Redis is external (Upstash)
+
+  worker:
+    build: . # Celery worker setup remains the same
+    container_name: celery_worker_service
+    dns:
+      - 8.8.8.8
+    volumes:
+      - .:/app
+    environment:
+      - REDIS_URL=${REDIS_URL_UPSTASH}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+    command: celery -A app.celery_app worker -l info --pool=solo
+    # depends_on: # Not needed
+
+# Docker Compose will automatically look for a .env file in this directory
+# to populate the ${VARIABLE_NAME} placeholders above.

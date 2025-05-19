@@ -1,2 +1,6 @@
-numpy==1.26.4
-huggingface-hub>=0.30.0,<1.0
+celery 
+redis>=4.2.0
+uvicorn[standard]
+gunicorn
+fastapi
+pydantic  
