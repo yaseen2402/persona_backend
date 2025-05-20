@@ -1,15 +1,19 @@
 
 services:
   web:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: fastapi_web_service # Renamed for clarity
     ports:
       - "5000:5000"
     volumes:
-      - .:/app # For development, allows code changes without rebuilding image
+      - ./app:/app/app  # For development, allows code changes without rebuilding image
+      - ./personas.json:/app/personas.json
     environment:
+      - PYTHONPATH=/app
       - HF_HOME=/app/.cache/huggingface 
-      - REDIS_URL=${REDIS_URL_UPSTASH}
+      - REDIS_URL_UPSTASH=${REDIS_URL_UPSTASH}
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
@@ -19,22 +23,26 @@ services:
     # Use Gunicorn to manage Uvicorn workers. 'app:app' refers to the
     # FastAPI instance 'app' in your 'app.py' file.
     # command: gunicorn -k uvicorn.workers.UvicornWorker -w 4 --bind 0.0.0.0:5000 app:app
-    command: uvicorn app:app --host 0.0.0.0 --port 5000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 5000 --reload --app-dir /app
     # depends_on: # Not needed if Redis is external (Upstash)
 
   worker:
-    build: . # Celery worker setup remains the same
+    build:
+      context: .
+      dockerfile: Dockerfile # Celery worker setup remains the same
     container_name: celery_worker_service
     dns:
       - 8.8.8.8
     volumes:
-      - .:/app
+      - ./app:/app/app
     environment:
-      - REDIS_URL=${REDIS_URL_UPSTASH}
+      - PYTHONPATH=/app
+      - HF_HOME=/app/.cache/huggingface
+      - REDIS_URL_UPSTASH=${REDIS_URL_UPSTASH}
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-    command: celery -A app.celery_app worker -l info --pool=solo
+    command: celery -A app.celery_app worker -l info --pool=solo -Q celery --concurrency=${CELERY_CONCURRENCY:-4}
     # depends_on: # Not needed
 
 # Docker Compose will automatically look for a .env file in this directory

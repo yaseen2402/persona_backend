@@ -23,8 +23,7 @@ COPY added_requirements.txt .
 RUN pip install --no-cache-dir -r added_requirements.txt
 
 # Copy the application code into the container
-COPY app.py .
-COPY .env .
+COPY ./app /app/app
 COPY personas.json .
 
 # Expose the port the Flask app runs on
