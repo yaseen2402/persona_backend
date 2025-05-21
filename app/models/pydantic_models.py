@@ -1,4 +1,3 @@
-# app/models/pydantic_models.py
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any
 from datetime import datetime
@@ -22,7 +21,7 @@ class ModelInfo(BaseModel):
     profile_pic_url: str
 
 class Message(BaseModel):
-    id: Any # Could be int or str depending on your DB's ID type for messages
+    id: Any 
     user_id: str
     ai_id: str
     content: str

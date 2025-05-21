@@ -1,4 +1,4 @@
-# Project Name: Your FastAPI & Celery Application
+# Project Name: Persona
 
 This project uses FastAPI for the web framework and Celery for handling background tasks, all containerized with Docker and managed by Docker Compose.
 
@@ -36,7 +36,6 @@ Follow these steps to build the Docker images and run the application services:
     ```bash
     docker-compose up --build
     ```
-    *   `--build`: This flag tells Docker Compose to build the images from your `Dockerfile` before starting the services. You typically need this the first time you run the command or if you've made changes to the `Dockerfile`, `requirements.txt`, or your application code that's copied into the image.
     *   This command will start:
         *   The FastAPI web service (typically accessible at `http://localhost:5000`).
         *   The Celery worker service, which will connect to your Upstash Redis instance and process background tasks.
@@ -51,14 +50,6 @@ Follow these steps to build the Docker images and run the application services:
     To run the services in the background (detached mode), use the `-d` flag:
     ```bash
     docker-compose up --build -d
-    ```
-
-*   **Viewing Logs:**
-    If running in detached mode, or if you want to see logs from a specific service:
-    ```bash
-    docker-compose logs -f          # Follow logs for all services
-    docker-compose logs -f web      # Follow logs for the 'web' service
-    docker-compose logs -f worker   # Follow logs for the 'worker' service
     ```
 
 *   **Stopping the Services:**
@@ -87,21 +78,3 @@ Follow these steps to build the Docker images and run the application services:
     docker-compose up
     ```
 
-## Development Notes
-
-*   **Code Changes:** If you have `volumes: - .:/app` in your `docker-compose.yml` for the `web` and `worker` services, changes to your Python code in the local `./app` directory will be reflected inside the running containers.
-    *   For **FastAPI (Uvicorn with reload or Gunicorn managing Uvicorn)**: Uvicorn's reload feature (`uvicorn.run("app:app", reload=True)`) or Gunicorn's reload mechanism (if configured) might pick up these changes automatically. If not, you may need to restart the specific service: `docker-compose restart web`.
-    *   For **Celery Worker**: The Celery worker typically needs to be restarted to pick up changes in task definitions or other imported code.
-        ```bash
-        docker-compose restart worker
-        ```
-
-## Troubleshooting
-
-*   **Port Conflicts:** If port `5000` (or any other port you're mapping) is already in use on your host machine, `docker-compose up` will fail. Change the host-side port mapping in `docker-compose.yml` (e.g., `"8000:5000"`) and access the app on the new host port (e.g., `http://localhost:8000`).
-*   **Environment Variables:** Ensure all required variables in your `.env` file are correctly set, especially `REDIS_URL_UPSTASH`.
-*   **Check Service Logs:** Use `docker-compose logs web` and `docker-compose logs worker` to inspect for errors if services are not starting correctly.
-
----
-
-This README provides a comprehensive guide. Remember to replace placeholders like "Your FastAPI & Celery Application" with your actual project name. You might also want to add an `.env.example` file to your repository to show the structure of the `.env` file without committing actual secrets.
